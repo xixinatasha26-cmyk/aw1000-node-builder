@@ -1,6 +1,9 @@
 name: Build Node 26 ARM64 musl (review candidate only)
 
 on:
+  push:
+    paths:
+      - build-inputs/source.sha256
   workflow_dispatch:
     inputs:
       verified_source_sha256:
@@ -17,6 +20,9 @@ jobs:
     container: alpine:3.23
     timeout-minutes: 300
     steps:
+      - name: Checkout build-only inputs
+        uses: actions/checkout@v4
+
       - name: Install ARM64 musl build dependencies
         run: |
           apk add --no-cache ca-certificates curl xz tar coreutils python3 make gcc g++ linux-headers binutils file pkgconf rust cargo git
@@ -27,9 +33,10 @@ jobs:
 
       - name: Download and verify pinned official Node.js source
         env:
-          SOURCE_SHA: ${{ inputs.verified_source_sha256 }}
+          SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.verified_source_sha256 || '' }}
         run: |
           set -eu
+          if [ -z "$SOURCE_SHA" ]; then SOURCE_SHA="$(cat build-inputs/source.sha256)"; fi
           printf '%s' "$SOURCE_SHA" | grep -Eq '^[a-fA-F0-9]{64}$' || { echo 'Invalid source SHA-256'; exit 1; }
           curl --fail --location --retry 3 --proto '=https' --tlsv1.2             'https://nodejs.org/dist/v26.13.0/node-v26.13.0.tar.xz'             --output node-v26.13.0.tar.xz
           printf '%s  %s\n' "$SOURCE_SHA" 'node-v26.13.0.tar.xz' | sha256sum -c -
