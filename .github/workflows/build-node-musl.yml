@@ -1,0 +1,68 @@
+name: Build Node 26 ARM64 musl (review candidate only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      verified_source_sha256:
+        description: "SHA-256 of official node-v26.13.0.tar.xz independently verified by the project owner"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: alpine:3.23
+    timeout-minutes: 300
+    steps:
+      - name: Install ARM64 musl build dependencies
+        run: |
+          apk add --no-cache ca-certificates curl xz tar coreutils python3 make gcc g++ linux-headers binutils file pkgconf rust cargo git
+          uname -m
+          cc --version | head -1
+          c++ --version | head -1
+          rustc --version
+
+      - name: Download and verify pinned official Node.js source
+        env:
+          SOURCE_SHA: ${{ inputs.verified_source_sha256 }}
+        run: |
+          set -eu
+          printf '%s' "$SOURCE_SHA" | grep -Eq '^[a-fA-F0-9]{64}$' || { echo 'Invalid source SHA-256'; exit 1; }
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2             'https://nodejs.org/dist/v26.13.0/node-v26.13.0.tar.xz'             --output node-v26.13.0.tar.xz
+          printf '%s  %s\n' "$SOURCE_SHA" 'node-v26.13.0.tar.xz' | sha256sum -c -
+          tar -xf node-v26.13.0.tar.xz
+
+      - name: Build natively for AArch64 musl
+        run: |
+          set -eu
+          cd node-v26.13.0
+          ./configure --prefix="$GITHUB_WORKSPACE/node-stage"
+          make -j2
+          make install
+          test -x "$GITHUB_WORKSPACE/node-stage/bin/node"
+
+      - name: Inspect ELF and generate build metadata
+        run: |
+          set -eu
+          mkdir -p review
+          cp node-stage/bin/node review/node
+          sha256sum review/node > review/SHA256SUMS
+          file review/node > review/file.txt
+          readelf -h review/node > review/elf-header.txt
+          readelf -l review/node > review/program-headers.txt
+          readelf -d review/node > review/dynamic.txt
+          readelf --version-info review/node > review/symbol-versions.txt
+          uname -a > review/runner-kernel.txt
+          ldd review/node > review/dependencies.txt 2>&1 || true
+          echo 'REVIEW ONLY: not approved for AW1000 deployment' > review/NOT-PRODUCTION.txt
+
+      - name: Upload review artifacts (not deployable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-v26.13.0-aarch64-musl-REVIEW-ONLY
+          path: review/
+          retention-days: 7
+          if-no-files-found: error
